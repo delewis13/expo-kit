@@ -40,19 +40,17 @@ function checkLength(text, max, what) {
 
 /**
  * The release-specific copy for `version`. Each source is `{ path, text }`, or omitted when that
- * store isn't part of the release. What's New and the Play notes are required; App Review notes
- * are optional (App Store Connect keeps the previous version's when absent).
+ * store isn't part of the release. The Play notes are required. What's New is optional here
+ * because Apple rejects it on an app's first version; the release requires it for every later
+ * one. App Review notes are optional (App Store Connect keeps the previous version's).
  */
 function readReleaseNotes({ appStore, play }, version) {
   assertSemver(version);
   const notes = { whatsNew: null, reviewNotes: null, playNotes: null };
   if (appStore) {
     notes.whatsNew = fencedBlockAfter(appStore.text, `What's New in This Version (${version}):`);
-    if (!notes.whatsNew) {
-      throw new Error(`${appStore.path} has no "What's New in This Version (${version}):" text block`);
-    }
     notes.reviewNotes = fencedBlockAfter(appStore.text, `App Review notes (${version}):`);
-    checkLength(notes.whatsNew, APP_STORE_WHATS_NEW_MAX, "App Store What's New");
+    if (notes.whatsNew) checkLength(notes.whatsNew, APP_STORE_WHATS_NEW_MAX, "App Store What's New");
     if (notes.reviewNotes) checkLength(notes.reviewNotes, APP_STORE_REVIEW_NOTES_MAX, 'App Review notes');
   }
   if (play) {

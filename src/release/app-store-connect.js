@@ -71,6 +71,14 @@ async function listVersions(asc, appId) {
   return res.data;
 }
 
+/**
+ * Whether `version` is the app's first App Store version: every version record is either this one
+ * or an unsubmitted draft the release renames to it (App Store Connect creates a "1.0" draft with
+ * every new app).
+ */
+const isFirstVersion = (versions, version) =>
+  versions.every((v) => v.version === version || EDITABLE_STATES.has(v.state));
+
 /** The editable App Store version record for `version`: reused, renamed, or created. */
 async function ensureVersion(asc, appId, version, log) {
   const versions = await listVersions(asc, appId);
@@ -210,17 +218,20 @@ async function submitForReview(asc, appId, versionId, log) {
 
 /**
  * Takes an uploaded build all the way to "Waiting for Review". A version already past the
- * editable states (submitted, in review, approved, live) is left alone.
+ * editable states (submitted, in review, approved, live) is left alone. What's New is skipped on
+ * the app's first version, where Apple rejects it.
  */
 async function releaseVersion({ credentials, appId, version, buildNumber, whatsNew, reviewNotes, log }) {
   const asc = createClient(credentials);
+  const first = isFirstVersion(await versionStatus({ credentials, appId }), version);
   const record = await ensureVersion(asc, appId, version, log);
   const state = versionState(record);
   if (!EDITABLE_STATES.has(state)) {
     log(`App Store version ${version} is already ${state}; nothing to submit`);
     return { state };
   }
-  await setWhatsNew(asc, record.id, whatsNew, log);
+  if (first) log("First App Store version: Apple doesn't take What's New, so it's skipped");
+  else await setWhatsNew(asc, record.id, whatsNew, log);
   if (reviewNotes) await setReviewNotes(asc, record.id, reviewNotes, log);
   const build = await waitForBuild(asc, appId, version, buildNumber, log);
   await attachBuild(asc, record.id, build, log);
@@ -238,4 +249,4 @@ async function versionStatus({ credentials, appId }) {
   }));
 }
 
-module.exports = { releaseVersion, versionStatus };
+module.exports = { releaseVersion, versionStatus, isFirstVersion };

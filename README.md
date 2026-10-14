@@ -12,7 +12,7 @@ differently.
 ## Install
 
 ```bash
-npm install --save-dev github:delewis13/expo-kit#v0.2.0
+npm install --save-dev github:delewis13/expo-kit#v0.3.0
 npx expo-kit check
 ```
 
@@ -64,7 +64,8 @@ already uses, from EAS, with your `eas login` session (or `EXPO_TOKEN`), and kee
 
 Write them before releasing, as fenced `text` blocks after an exact label line.
 
-In `docs/APP_STORE_METADATA.md` (What's New is required; review notes are optional, App Store
+In `docs/APP_STORE_METADATA.md` (What's New is required from the second App Store version on;
+Apple rejects it on the first, so the release skips it there. Review notes are optional; App Store
 Connect keeps the last ones):
 
 ````md

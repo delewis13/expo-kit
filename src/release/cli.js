@@ -192,7 +192,10 @@ async function release(version, options) {
   const creds = await eas.fetchStoreCredentials(expo);
   if (platforms.includes('ios')) {
     if (!creds.asc) throw new Error('EAS has no App Store Connect API key linked for submissions');
-    await appStore.versionStatus({ credentials: creds.asc, appId: ascAppId });
+    const versions = await appStore.versionStatus({ credentials: creds.asc, appId: ascAppId });
+    if (!releaseNotes.whatsNew && !appStore.isFirstVersion(versions, version)) {
+      throw new Error(`${CONVENTIONS.notes.appStore} has no "What's New in This Version (${version}):" text block`);
+    }
   }
   if (platforms.includes('android')) {
     if (!creds.play) throw new Error('EAS has no Google service-account key linked for submissions');

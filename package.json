@@ -1,6 +1,6 @@
 {
   "name": "@delewis13/expo-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Shared tooling for Expo apps on EAS: one-command App Store + Google Play releases, by convention.",
   "repository": "github:delewis13/expo-kit",

@@ -51,8 +51,16 @@ describe('readReleaseNotes', () => {
     assert.equal(readReleaseNotes(sources(md), '2.0.0').reviewNotes, null);
   });
 
-  it("fails without What's New or Play notes, naming the file", () => {
-    assert.throws(() => readReleaseNotes(sources(), '2.1.0'), /APP_STORE\.md has no "What's New/);
+  it("treats What's New as optional (Apple rejects it on a first version)", () => {
+    const md = appStoreText.replace(/What's New[\s\S]*?```\n\n/, '');
+    assert.deepEqual(readReleaseNotes(sources(md), '2.0.0'), {
+      whatsNew: null,
+      reviewNotes: 'Add the widget.',
+      playNotes: 'Play news.',
+    });
+  });
+
+  it('fails without Play notes, naming the file', () => {
     const noPlay = playText.replace('2.0.0:', '2.0.1:');
     assert.throws(() => readReleaseNotes(sources(appStoreText, noPlay), '2.0.0'), /PLAY\.md has no "2\.0\.0:"/);
   });
@@ -114,5 +122,22 @@ describe('cutChangelog', () => {
     const empty = cutChangelog(md, '1.4.0', '2026-10-01');
     assert.throws(() => cutChangelog(empty, '1.5.0', '2026-10-02'), /empty/);
     assert.throws(() => cutChangelog(md, '1.3.0', '2026-10-01', 'CHANGELOG.md'), /CHANGELOG\.md already has/);
+  });
+});
+
+describe('isFirstVersion', () => {
+  const { isFirstVersion } = require('../../src/release/app-store-connect');
+
+  const v = (version, state) => ({ version, state });
+
+  it('is true only when no other version has been submitted', () => {
+    assert.equal(isFirstVersion([], '1.0.0'), true);
+    assert.equal(isFirstVersion([v('1.0.0', 'WAITING_FOR_REVIEW')], '1.0.0'), true);
+    assert.equal(isFirstVersion([v('1.0.0', 'PREPARE_FOR_SUBMISSION'), v('0.9.0', 'READY_FOR_SALE')], '1.0.0'), false);
+    assert.equal(isFirstVersion([v('1.0.0', 'WAITING_FOR_REVIEW')], '1.1.0'), false);
+  });
+
+  it("ignores the unsubmitted draft App Store Connect creates with a new app", () => {
+    assert.equal(isFirstVersion([v('1.0', 'PREPARE_FOR_SUBMISSION')], '1.0.0'), true);
   });
 });
