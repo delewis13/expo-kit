@@ -21,14 +21,14 @@ const notes = require('./notes');
 const eas = require('./eas');
 const appStore = require('./app-store-connect');
 const play = require('./google-play');
-const { checkSubmitProfile } = require('./config');
-const { findRoot, read, resolveExpoConfig, loadProject, loadReleaseNotes } = require('./project');
+const { CONVENTIONS } = require('./conventions');
+const { findRoot, read, resolveExpoConfig, loadApp, loadConformingApp, loadReleaseNotes } = require('./project');
 
 const USAGE = `usage:
   expo-kit release <X.Y.Z> [--dry-run] [--platform ios|android|all] [--rebuild]
   expo-kit release status
 
-Settings come from the "release" section of expo-kit.config.js (see the expo-kit README).`;
+The app must follow the expo-kit conventions: "expo-kit check" lists anything it does differently.`;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const logger = (prefix) => (message) => console.log(`[${prefix}] ${message}`);
@@ -41,6 +41,7 @@ const SUBMISSION_ACTIVE = new Set(['AWAITING_BUILD', 'IN_QUEUE', 'IN_PROGRESS'])
 const write = (root, rel, text) => fs.writeFileSync(path.join(root, rel), text);
 const git = (root, ...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
 const exec = (root, cmd, args) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit' });
+const { branch, profile, playTrack, appJson, changelog } = CONVENTIONS;
 
 function localDate() {
   const d = new Date();
@@ -56,7 +57,7 @@ function rerunCommand(version, platform) {
 }
 
 /** Releases start from a clean, pushed branch so the build commit is the one on origin. */
-function checkGitForPrepare(root, branch) {
+function checkGitForPrepare(root) {
   const current = git(root, 'rev-parse', '--abbrev-ref', 'HEAD');
   if (current !== branch) throw new Error(`releases are cut from ${branch} (on ${current})`);
   if (git(root, 'status', '--porcelain')) throw new Error('the working tree has uncommitted changes');
@@ -67,37 +68,32 @@ function checkGitForPrepare(root, branch) {
 }
 
 /** The files the version bump rewrites, as `{ relPath: newText }`. Throws before any change. */
-function plannedEdits({ root, config, expo }, version) {
-  const edits = {
-    [config.versionFile]: notes.bumpVersionText(read(root, config.versionFile), expo.version, version, config.versionFile),
+function plannedEdits({ root, expo }, version) {
+  return {
+    [appJson]: notes.bumpVersionText(read(root, appJson), expo.version, version, appJson),
+    [changelog]: notes.cutChangelog(read(root, changelog), version, localDate(), changelog),
   };
-  if (config.changelog) {
-    edits[config.changelog] = notes.cutChangelog(read(root, config.changelog), version, localDate(), config.changelog);
-  }
-  return edits;
 }
 
 function prepare(project, version) {
-  const { root, config } = project;
+  const { root } = project;
   const edits = plannedEdits(project, version);
-  if (config.gates.length) {
-    log('Running the quality gates…');
-    for (const gate of config.gates) exec(root, 'npm', ['run', '-s', gate]);
-  }
+  log('Running the quality gates…');
+  for (const gate of CONVENTIONS.gates) exec(root, 'npm', ['run', '-s', gate]);
   const originals = Object.fromEntries(Object.keys(edits).map((rel) => [rel, read(root, rel)]));
   for (const [rel, text] of Object.entries(edits)) write(root, rel, text);
   const resolved = resolveExpoConfig(root).version;
   if (resolved !== version) {
     for (const [rel, text] of Object.entries(originals)) write(root, rel, text);
     throw new Error(
-      `bumped ${config.versionFile}, but the Expo config still resolves to ${resolved}: ` +
-        'set release.versionFile to the file the app version comes from',
+      `bumped ${appJson}, but the Expo config still resolves to ${resolved}: ` +
+        `app.config.* must take the version from ${appJson}`,
     );
   }
   log(`Bumped to ${version}: ${Object.keys(edits).join(', ')}`);
   git(root, 'add', ...Object.keys(edits));
   exec(root, 'git', ['commit', '-m', `Release ${version}`]);
-  exec(root, 'git', ['push', 'origin', config.branch]);
+  exec(root, 'git', ['push', 'origin', branch]);
 }
 
 function tagRelease(root, version, commit, builds) {
@@ -134,7 +130,7 @@ async function waitForEasBuild(buildId, platformLog) {
  * Waits for the build's EAS upload to the store. If EAS never queued one (or it failed), uploads
  * it now with `eas submit`.
  */
-async function ensureUploaded(platform, buildId, { root, profile }, platformLog) {
+async function ensureUploaded(platform, buildId, root, platformLog) {
   let waiting = false;
   for (;;) {
     const { submissions } = await eas.getBuild(buildId);
@@ -156,18 +152,20 @@ async function ensureUploaded(platform, buildId, { root, profile }, platformLog)
 }
 
 async function status() {
-  const { submit, expo } = loadProject(findRoot());
+  const { expo, files } = loadApp(findRoot());
+  if (expo.error) throw new Error(`\`npx expo config\` failed: ${expo.error}`);
+  const ascAppId = JSON.parse(files['eas.json']).submit?.[profile]?.ios?.ascAppId;
   const creds = await eas.fetchStoreCredentials(expo);
   const [ios, android] = await Promise.all([
-    creds.asc && submit.ascAppId ? appStore.versionStatus({ credentials: creds.asc, appId: submit.ascAppId }) : null,
+    creds.asc && ascAppId ? appStore.versionStatus({ credentials: creds.asc, appId: ascAppId }) : null,
     creds.play && expo.packageName
-      ? play.trackStatus({ serviceAccount: creds.play, packageName: expo.packageName, track: submit.playTrack })
+      ? play.trackStatus({ serviceAccount: creds.play, packageName: expo.packageName, track: playTrack })
       : null,
   ]);
   console.log('App Store (newest first):');
   if (!ios) console.log('  not set up (no App Store Connect key in EAS, or no ascAppId in eas.json)');
   for (const v of (ios ?? []).slice(0, 3)) console.log(`  ${v.version}  ${v.state}  (${v.releaseType})`);
-  console.log(`Google Play ${submit.playTrack} track:`);
+  console.log(`Google Play ${playTrack} track:`);
   if (!android) console.log('  not set up (no Google service-account key in EAS)');
   for (const r of android ?? []) {
     console.log(`  ${r.name}  codes ${r.versionCodes.join(',')}  ${r.status}${r.hasNotes ? '' : '  (no release notes)'}`);
@@ -177,26 +175,24 @@ async function status() {
 async function release(version, options) {
   notes.assertSemver(version);
   const platforms = options.platform === 'all' ? ['ios', 'android'] : [options.platform];
-  const project = loadProject(findRoot());
-  const { root, config, submit, expo } = project;
-  const profile = config.profile;
-  checkSubmitProfile(submit, platforms, profile);
+  const project = loadConformingApp(findRoot());
+  const { root, expo, ascAppId } = project;
 
-  const releaseNotes = loadReleaseNotes(root, version, platforms, config);
+  const releaseNotes = loadReleaseNotes(root, version, platforms);
   log(`Store notes for ${version} found and within limits`);
 
   const order = notes.compareVersions(version, expo.version);
   if (order < 0) throw new Error(`${version} is older than the app's current ${expo.version}`);
   const needsPrepare = order > 0;
   if (needsPrepare) {
-    checkGitForPrepare(root, config.branch);
+    checkGitForPrepare(root);
     plannedEdits(project, version);
   }
 
   const creds = await eas.fetchStoreCredentials(expo);
   if (platforms.includes('ios')) {
     if (!creds.asc) throw new Error('EAS has no App Store Connect API key linked for submissions');
-    await appStore.versionStatus({ credentials: creds.asc, appId: submit.ascAppId });
+    await appStore.versionStatus({ credentials: creds.asc, appId: ascAppId });
   }
   if (platforms.includes('android')) {
     if (!creds.play) throw new Error('EAS has no Google service-account key linked for submissions');
@@ -228,7 +224,7 @@ async function release(version, options) {
 
   if (options['dry-run']) {
     const steps = [
-      needsPrepare && `bump ${expo.version} → ${version}${config.changelog ? ', cut the changelog' : ''}, commit + push`,
+      needsPrepare && `bump ${expo.version} → ${version}, cut the changelog, commit + push`,
       toStart.length && `start ${toStart.join(' + ')} build(s) with auto-submit`,
       `wait for builds + uploads, tag v${version}, and submit`,
     ].filter(Boolean);
@@ -264,11 +260,11 @@ async function release(version, options) {
   const tasks = platforms.map(async (platform) => {
     const platformLog = logger(platform);
     const build = builds[platform];
-    await ensureUploaded(platform, build.id, { root, profile }, platformLog);
+    await ensureUploaded(platform, build.id, root, platformLog);
     if (platform === 'ios') {
       await appStore.releaseVersion({
         credentials: creds.asc,
-        appId: submit.ascAppId,
+        appId: ascAppId,
         version,
         buildNumber: build.buildNumber,
         whatsNew: releaseNotes.whatsNew,
@@ -279,7 +275,7 @@ async function release(version, options) {
       await play.releaseOnTrack({
         serviceAccount: creds.play,
         packageName: expo.packageName,
-        track: submit.playTrack,
+        track: playTrack,
         version,
         versionCode: build.buildNumber,
         notes: releaseNotes.playNotes,

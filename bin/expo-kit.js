@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const COMMANDS = {
+  check: { module: '../src/check', summary: 'list everything this app does differently from the conventions' },
   release: { module: '../src/release/cli', summary: 'one-command App Store + Google Play release' },
 };
 

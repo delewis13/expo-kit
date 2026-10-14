@@ -1,14 +1,12 @@
-// Reads an app's release setup from disk: expo-kit.config.js, eas.json, the per-store notes, and
-// the Expo config as `expo config` resolves it (so app.config.js/ts apps work like app.json ones).
+// Reads an app from disk for `expo-kit release` and `expo-kit check`: the files the conventions
+// cover, the repo's default branch on origin, and the Expo config as `expo config` resolves it.
 
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const { resolveReleaseConfig, readSubmitProfile } = require('./config');
+const { CONVENTIONS, releaseProblems } = require('./conventions');
 const { readReleaseNotes } = require('./notes');
-
-const CONFIG_FILE = 'expo-kit.config.js';
 
 /** The nearest directory at or above `start` that holds eas.json. */
 function findRoot(start = process.cwd()) {
@@ -19,15 +17,23 @@ function findRoot(start = process.cwd()) {
 }
 
 const read = (root, rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+const readIfExists = (root, rel) => (fs.existsSync(path.join(root, rel)) ? read(root, rel) : null);
 
-/** The `release` section of expo-kit.config.js, defaults filled in. The file is optional. */
-function loadReleaseConfig(root) {
-  const file = path.join(root, CONFIG_FILE);
-  const kitConfig = fs.existsSync(file) ? require(file) : {};
-  return resolveReleaseConfig(kitConfig.release);
+/** The branch origin's HEAD points at, asked of the remote so a stale local origin/HEAD can't lie. */
+function defaultBranch(root) {
+  try {
+    const out = execFileSync('git', ['ls-remote', '--symref', 'origin', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(out)?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
-/** The fields the release needs from the resolved Expo config. */
+/** The fields the release needs from the resolved Expo config, or `{ error }`. */
 function resolveExpoConfig(root) {
   let out;
   try {
@@ -38,10 +44,7 @@ function resolveExpoConfig(root) {
     });
   } catch (error) {
     const detail = String(error.stderr ?? '').trim().split('\n').slice(-2).join(' ');
-    throw new Error(
-      `\`npx expo config\` failed${detail ? `: ${detail}` : ''} ` +
-        '(are node_modules up to date? EXPO_DEBUG=1 npx expo config shows why)',
-    );
+    return { error: `${detail || 'no output'} (are node_modules up to date? EXPO_DEBUG=1 npx expo config shows why)` };
   }
   const expo = JSON.parse(out);
   return {
@@ -52,25 +55,39 @@ function resolveExpoConfig(root) {
   };
 }
 
-/** Everything a release reads up front. */
-function loadProject(root) {
-  const config = loadReleaseConfig(root);
-  const submit = readSubmitProfile(read(root, 'eas.json'), config.profile);
-  const expo = resolveExpoConfig(root);
-  if (!expo.projectId) throw new Error('the Expo config has no extra.eas.projectId: run `npx eas-cli init`');
-  return { root, config, submit, expo };
+/** Everything the conventions are checked against. */
+function loadApp(root) {
+  const c = CONVENTIONS;
+  const paths = [c.appJson, 'eas.json', 'package.json', c.changelog, ...Object.values(c.notes), 'expo-kit.config.js'];
+  return {
+    root,
+    defaultBranch: defaultBranch(root),
+    files: Object.fromEntries(paths.map((rel) => [rel, readIfExists(root, rel)])),
+    expo: resolveExpoConfig(root),
+  };
+}
+
+/** The app, after checking it follows every convention (all problems are reported at once). */
+function loadConformingApp(root) {
+  const app = loadApp(root);
+  const problems = releaseProblems(app);
+  if (problems.length) {
+    throw new Error(`this app doesn't follow the expo-kit conventions:\n  - ${problems.join('\n  - ')}`);
+  }
+  const submit = JSON.parse(app.files['eas.json']).submit[CONVENTIONS.profile];
+  return { ...app, ascAppId: submit.ios.ascAppId };
 }
 
 /** The store notes `expo-kit release <version>` would send, for the given platforms. */
-function loadReleaseNotes(root, version, platforms = ['ios', 'android'], config = loadReleaseConfig(root)) {
+function loadReleaseNotes(root, version, platforms = ['ios', 'android']) {
   const source = (rel) => ({ path: rel, text: read(root, rel) });
   return readReleaseNotes(
     {
-      appStore: platforms.includes('ios') ? source(config.notes.appStore) : undefined,
-      play: platforms.includes('android') ? source(config.notes.play) : undefined,
+      appStore: platforms.includes('ios') ? source(CONVENTIONS.notes.appStore) : undefined,
+      play: platforms.includes('android') ? source(CONVENTIONS.notes.play) : undefined,
     },
     version,
   );
 }
 
-module.exports = { findRoot, read, loadReleaseConfig, resolveExpoConfig, loadProject, loadReleaseNotes };
+module.exports = { findRoot, read, resolveExpoConfig, loadApp, loadConformingApp, loadReleaseNotes };
