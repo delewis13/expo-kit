@@ -4,6 +4,7 @@
 // release notes in one edit, which Play then sends for review.
 
 const crypto = require('crypto');
+const { fetchWithRetry } = require('./http');
 
 const API = 'https://androidpublisher.googleapis.com/androidpublisher/v3/applications';
 const SCOPE = 'https://www.googleapis.com/auth/androidpublisher';
@@ -23,7 +24,8 @@ async function accessToken(serviceAccount) {
   const signature = crypto
     .sign('RSA-SHA256', Buffer.from(`${header}.${claims}`), serviceAccount.private_key)
     .toString('base64url');
-  const res = await fetch(serviceAccount.token_uri, {
+  // Minting a token changes nothing, so this POST is safe to retry.
+  const res = await fetchWithRetry(serviceAccount.token_uri, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -39,7 +41,8 @@ async function accessToken(serviceAccount) {
 async function createClient(serviceAccount, packageName) {
   const token = await accessToken(serviceAccount);
   async function request(method, path, body) {
-    const res = await fetch(`${API}/${packageName}${path}`, {
+    const send = method === 'GET' ? fetchWithRetry : fetch;
+    const res = await send(`${API}/${packageName}${path}`, {
       method,
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,

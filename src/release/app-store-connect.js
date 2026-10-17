@@ -4,6 +4,7 @@
 // re-run after a failure (or after a partial manual edit in the console) picks up where it left off.
 
 const crypto = require('crypto');
+const { fetchWithRetry } = require('./http');
 
 const API = 'https://api.appstoreconnect.apple.com/v1';
 
@@ -40,7 +41,8 @@ function createClient(credentials) {
       token = makeToken(credentials);
       tokenAt = Date.now();
     }
-    const res = await fetch(`${API}${pathAndQuery}`, {
+    const send = method === 'GET' ? fetchWithRetry : fetch;
+    const res = await send(`${API}${pathAndQuery}`, {
       method,
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,

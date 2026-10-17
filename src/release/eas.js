@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { fetchWithRetry } = require('./http');
 
 const GRAPHQL_URL = 'https://api.expo.dev/graphql';
 
@@ -20,8 +21,9 @@ function authHeaders() {
   return { 'expo-session': secret };
 }
 
+// Every query here is read-only, so all of them can be retried.
 async function graphql(query, variables) {
-  const res = await fetch(GRAPHQL_URL, {
+  const res = await fetchWithRetry(GRAPHQL_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ query, variables }),
