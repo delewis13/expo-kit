@@ -27,7 +27,7 @@ const eas = require('./eas');
 const appStore = require('./app-store-connect');
 const play = require('./google-play');
 const { CONVENTIONS, githubLinkProblem } = require('./conventions');
-const { git, checkCleanAndPushed, headCommit, originUrl } = require('./git');
+const { git, checkCleanAndPushed, headCommit, originUrl, isAncestor } = require('./git');
 const { findRoot, read, resolveExpoConfig, loadApp, loadConformingApp, loadReleaseNotes } = require('./project');
 
 const USAGE = `usage:
@@ -52,6 +52,7 @@ const write = (root, rel, text) => fs.writeFileSync(path.join(root, rel), text);
 const exec = (root, cmd, args) => execFileSync(cmd, args, { cwd: root, stdio: 'inherit' });
 const { branch, profile, playTrack, appJson, changelog, workflow } = CONVENTIONS;
 const short = (commit) => commit.slice(0, 7);
+const platformLabel = (platform) => (platform === 'ios' ? 'iOS' : 'Android');
 
 function localDate() {
   const d = new Date();
@@ -95,19 +96,43 @@ function prepare(project, version) {
   exec(root, 'git', ['push', 'origin', branch]);
 }
 
-function tagRelease(root, version, commit, builds) {
+/**
+ * The tag for `builds` (`{ platform: build }`, in `platforms` order). When the platforms were built
+ * from different commits, each one's commit goes in the message, and the tag points at the newer
+ * commit (the one that contains the other); if neither contains the other, at the first
+ * platform's (iOS when releasing both). `isAncestor(a, b)` answers "is a an ancestor of b".
+ */
+function tagPlan(version, builds, platforms, { head, isAncestor: ancestor = () => false }) {
   const tag = `v${version}`;
+  const commits = platforms.map((p) => builds[p].gitCommitHash ?? head);
+  const mixed = new Set(commits).size > 1;
+  const summary = platforms
+    .map((p, i) => `${platformLabel(p)} ${builds[p].buildNumber}${mixed ? ` @${short(commits[i])}` : ''}`)
+    .join(', ');
+  if (!mixed) return { tag, commit: commits[0], message: `${tag} (${summary})`, warning: null };
+
+  const [first, second] = commits;
+  const commit = ancestor(first, second) ? second : first;
+  const why = commit === second || ancestor(second, first) ? 'the newer one' : `neither contains the other, so ${platformLabel(platforms[0])}'s`;
+  const builtFrom = platforms.map((p, i) => `${platformLabel(p)} ${builds[p].buildNumber} from ${short(commits[i])}`);
+  return {
+    tag,
+    commit,
+    message: `${tag} (${summary})`,
+    warning: `the builds come from different commits (${builtFrom.join(', ')}): tagging ${short(commit)} (${why})`,
+  };
+}
+
+function tagRelease(root, { tag, commit, message, warning }) {
+  if (warning) log(`WARNING: ${warning}`);
   if (git(root, 'tag', '--list', tag)) {
     const tagged = git(root, 'rev-list', '-n', '1', tag);
-    if (tagged !== commit) log(`WARNING: ${tag} already points at ${tagged.slice(0, 7)}, not ${commit.slice(0, 7)}`);
+    if (tagged !== commit) log(`WARNING: ${tag} already points at ${short(tagged)}, not ${short(commit)}`);
     return;
   }
-  const summary = Object.entries(builds)
-    .map(([platform, b]) => `${platform === 'ios' ? 'iOS' : 'Android'} ${b.buildNumber}`)
-    .join(', ');
-  git(root, 'tag', '-a', tag, commit, '-m', `${tag} (${summary})`);
+  git(root, 'tag', '-a', tag, commit, '-m', message);
   git(root, 'push', '--quiet', 'origin', tag);
-  log(`Tagged ${tag} on ${commit.slice(0, 7)} (${summary})`);
+  log(`Tagged ${tag} on ${short(commit)} (${message.slice(tag.length + 2, -1)})`);
 }
 
 /** Polls EAS until the build is FINISHED. */
@@ -349,7 +374,10 @@ async function release(version, options) {
       throw new Error(`the ${platform} build ${b.id} is from ${short(b.gitCommitHash)}, not ${short(commit)}`);
     }
   }
-  tagRelease(root, version, builds[platforms[0]].gitCommitHash ?? git(root, 'rev-parse', 'HEAD'), builds);
+  tagRelease(
+    root,
+    tagPlan(version, builds, platforms, { head: headCommit(root), isAncestor: (a, b) => isAncestor(root, a, b) }),
+  );
 
   const tasks = platforms.map(async (platform) => {
     const platformLog = logger(platform);
@@ -420,4 +448,4 @@ function run(argv) {
   });
 }
 
-module.exports = { run, parseCommandLine, rerunCommand };
+module.exports = { run, parseCommandLine, rerunCommand, tagPlan };
