@@ -1,8 +1,10 @@
 // `expo-kit check`: everything about this app that doesn't follow the expo-kit conventions, all at
-// once, including whether EAS holds the store keys the release uses.
+// once, including whether EAS holds the store keys the release uses and whether the EAS project is
+// linked to the GitHub repo (remote builds need it; `expo-kit release --local` doesn't).
 
-const { releaseProblems } = require('./release/conventions');
+const { releaseProblems, githubLinkProblem } = require('./release/conventions');
 const { findRoot, loadApp } = require('./release/project');
+const { originUrl } = require('./release/git');
 const eas = require('./release/eas');
 
 async function credentialProblems(expo) {
@@ -18,9 +20,23 @@ async function credentialProblems(expo) {
   }
 }
 
+async function githubProblems(root, expo) {
+  if (expo.error || !expo.projectId) return [];
+  try {
+    const problem = githubLinkProblem(await eas.linkedGitHubRepo(expo.projectId), originUrl(root));
+    return problem ? [problem] : [];
+  } catch (error) {
+    return [`couldn't read the EAS project's GitHub link: ${error.message}`];
+  }
+}
+
 async function main() {
   const app = loadApp(findRoot());
-  const problems = [...releaseProblems(app), ...(await credentialProblems(app.expo))];
+  const problems = [
+    ...releaseProblems(app),
+    ...(await credentialProblems(app.expo)),
+    ...(await githubProblems(app.root, app.expo)),
+  ];
   if (!problems.length) {
     console.log('✓ follows the expo-kit conventions');
     return;

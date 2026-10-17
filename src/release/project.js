@@ -58,7 +58,15 @@ function resolveExpoConfig(root) {
 /** Everything the conventions are checked against. */
 function loadApp(root) {
   const c = CONVENTIONS;
-  const paths = [c.appJson, 'eas.json', 'package.json', c.changelog, ...Object.values(c.notes), 'expo-kit.config.js'];
+  const paths = [
+    c.appJson,
+    'eas.json',
+    'package.json',
+    c.changelog,
+    ...Object.values(c.notes),
+    'expo-kit.config.js',
+    c.workflow,
+  ];
   return {
     root,
     defaultBranch: defaultBranch(root),
@@ -67,10 +75,13 @@ function loadApp(root) {
   };
 }
 
-/** The app, after checking it follows every convention (all problems are reported at once). */
-function loadConformingApp(root) {
+/**
+ * The app, after checking it follows every convention (all problems are reported at once).
+ * `options` go to releaseProblems.
+ */
+function loadConformingApp(root, options) {
   const app = loadApp(root);
-  const problems = releaseProblems(app);
+  const problems = releaseProblems(app, options);
   if (problems.length) {
     throw new Error(`this app doesn't follow the expo-kit conventions:\n  - ${problems.join('\n  - ')}`);
   }
