@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { pickBuild, workflowBuilds, activeRunAt, workflowUploadPending } = require('../../src/release/eas');
+const { pickBuild, workflowBuilds, activeRunAt, workflowUploadPending, workflowUploaded } = require('../../src/release/eas');
 
 const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -121,5 +121,49 @@ describe('workflowUploadPending', () => {
     for (const status of ['SUCCESS', 'FAILURE', 'CANCELED', 'SKIPPED']) {
       assert.equal(workflowUploadPending(workflowJob(status)), false, status);
     }
+  });
+
+  // What EAS actually returns: requiredJobKeys is empty even for jobs with `needs`.
+  const easJob = (runStatus, jobs) => ({ key: 'build_android', workflowRun: { status: runStatus, jobs } });
+  const buildAndroid = { key: 'build_android', type: 'BUILD', status: 'SUCCESS', requiredJobKeys: [] };
+
+  it('finds the submit job by its conventional key when requiredJobKeys is empty', () => {
+    const submit = (status) => ({ key: 'submit_android', type: 'SUBMISSION', status, requiredJobKeys: [] });
+    const done = { key: 'submit_ios', type: 'SUBMISSION', status: 'SUCCESS', requiredJobKeys: [] };
+    assert.equal(workflowUploadPending(easJob('IN_PROGRESS', [buildAndroid, done, submit('IN_PROGRESS')])), true);
+    assert.equal(workflowUploadPending(easJob('SUCCESS', [buildAndroid, done, submit('SUCCESS')])), false);
+  });
+
+  it("is true while the run is going and EAS hasn't created the submit job yet", () => {
+    assert.equal(workflowUploadPending(easJob('IN_PROGRESS', [buildAndroid])), true);
+  });
+
+  it('is false when the run is over without a submit job for the build', () => {
+    assert.equal(workflowUploadPending(easJob('SUCCESS', [buildAndroid])), false);
+    assert.equal(workflowUploadPending(easJob('FAILURE', [buildAndroid])), false);
+  });
+});
+
+describe('workflowUploaded', () => {
+  const easJob = (submitStatus) => ({
+    key: 'build_android',
+    workflowRun: {
+      status: 'IN_PROGRESS',
+      jobs: [
+        { key: 'build_android', type: 'BUILD', status: 'SUCCESS', requiredJobKeys: [] },
+        { key: 'submit_android', type: 'SUBMISSION', status: submitStatus, requiredJobKeys: [] },
+      ],
+    },
+  });
+
+  it("is true only once the build's submit job succeeded", () => {
+    assert.equal(workflowUploaded(easJob('SUCCESS')), true);
+    for (const status of ['NEW', 'IN_PROGRESS', 'FAILURE', 'CANCELED']) {
+      assert.equal(workflowUploaded(easJob(status)), false, status);
+    }
+  });
+
+  it('is false for a build no workflow made', () => {
+    assert.equal(workflowUploaded(null), false);
   });
 });

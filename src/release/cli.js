@@ -185,7 +185,7 @@ async function ensureUploaded(platform, buildId, root, platformLog, { workflow: 
   for (;;) {
     const build = await eas.getBuild(buildId, { workflow: fromWorkflow });
     const { submissions } = build;
-    if (submissions.some((s) => s.status === 'FINISHED')) {
+    if (build.workflowUploaded || submissions.some((s) => s.status === 'FINISHED')) {
       platformLog('Uploaded to the store by EAS');
       return;
     }

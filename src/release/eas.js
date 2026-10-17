@@ -208,17 +208,37 @@ const BUILD_FIELDS = `
   submissions { status error { message } }`;
 
 const WORKFLOW_JOB_FIELDS = `
-  workflowJob { key workflowRun { jobs { key type status requiredJobKeys } } }`;
+  workflowJob { key workflowRun { status jobs { key type status requiredJobKeys } } }`;
 
 /**
- * Whether the workflow that made a build (`raw.workflowJob`) still has a submit job for it that
- * hasn't finished, so nothing should upload the build in the meantime.
+ * The submit job for the build job `workflowJob.key`. EAS returns `requiredJobKeys` empty even for
+ * a job with `needs`, so the conventional key (`build_ios` → `submit_ios`) is what links them.
+ */
+function workflowSubmitJob(workflowJob) {
+  const { jobs } = workflowJob.workflowRun;
+  const key = workflowJob.key.replace(/^build_/, 'submit_');
+  return (
+    jobs.find((j) => j.type === 'SUBMISSION' && j.key === key) ??
+    jobs.find((j) => j.type === 'SUBMISSION' && (j.requiredJobKeys ?? []).includes(workflowJob.key)) ??
+    null
+  );
+}
+
+/**
+ * Whether the workflow that made a build (`raw.workflowJob`) may still upload it, so nothing else
+ * should in the meantime. EAS creates a submit job only once its build job ends, so a missing one
+ * counts as pending while the run is still going.
  */
 function workflowUploadPending(workflowJob) {
   if (!workflowJob) return false;
-  return workflowJob.workflowRun.jobs.some(
-    (j) => j.type === 'SUBMISSION' && j.requiredJobKeys.includes(workflowJob.key) && JOB_PENDING.has(j.status),
-  );
+  const job = workflowSubmitJob(workflowJob);
+  if (job) return JOB_PENDING.has(job.status);
+  return WORKFLOW_ACTIVE.has(workflowJob.workflowRun.status);
+}
+
+/** Whether the workflow's submit job for the build finished successfully. */
+function workflowUploaded(workflowJob) {
+  return Boolean(workflowJob) && workflowSubmitJob(workflowJob)?.status === 'SUCCESS';
 }
 
 function toBuild(raw) {
@@ -231,7 +251,10 @@ function toBuild(raw) {
     error: raw.error?.message ?? null,
     submissions: raw.submissions.map((s) => ({ status: s.status, error: s.error?.message ?? null })),
   };
-  if ('workflowJob' in raw) build.workflowUploadPending = workflowUploadPending(raw.workflowJob);
+  if ('workflowJob' in raw) {
+    build.workflowUploadPending = workflowUploadPending(raw.workflowJob);
+    build.workflowUploaded = workflowUploaded(raw.workflowJob);
+  }
   return build;
 }
 
@@ -263,7 +286,10 @@ async function findLatestBuild({ projectId, platform, version, profile, gitCommi
   return pickBuild(data.app.byId.builds.map(toBuild), { version, gitCommitHash });
 }
 
-/** A build; `{ workflow: true }` adds `workflowUploadPending` for builds made by a workflow. */
+/**
+ * A build; `{ workflow: true }` adds `workflowUploadPending` and `workflowUploaded` for builds made
+ * by a workflow.
+ */
 async function getBuild(buildId, { workflow = false } = {}) {
   const data = await graphql(
     `query Build($buildId: ID!) { builds { byId(buildId: $buildId) { ${BUILD_FIELDS}${workflow ? WORKFLOW_JOB_FIELDS : ''} } } }`,
@@ -290,6 +316,7 @@ module.exports = {
   findActiveWorkflowRun,
   linkedGitHubRepo,
   workflowUploadPending,
+  workflowUploaded,
   pickBuild,
   findLatestBuild,
   getBuild,
